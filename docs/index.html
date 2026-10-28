@@ -102,17 +102,27 @@ const SECTORS = [["Communication Services","XLC"],["Consumer Discretionary","XLY
 const COLS = [["signal","Signal",""],["name","Aktie",""],["ticker","Ticker",""],["price","Aktienkurs","num"],["mc","Marktkap.","num"],["vol","Volumen","num"],["ind","Industrie / Branche",""],["etf","Sektor",""],["chart","Chart",""]];
 const SUN = '<svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f5b301" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
 const MOON = '<svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="#6366f1"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>';
-/* Logos: mehrere Quellen nacheinander, zuletzt ein Buchstaben-Platzhalter */
+/* Logos: mehrere Quellen nacheinander. Leere/weiße Bilder und Fehler -> nächste Quelle, zuletzt Buchstaben-Platzhalter */
 const LOGO_SRC = [
   t => `https://financialmodelingprep.com/image-stock/${t.replace(".", "-")}.png`,
-  t => `https://assets.parqet.com/logos/symbol/${t.replace(".", "-")}?format=png`
+  t => `https://assets.parqet.com/logos/symbol/${t.replace(".", "-")}?format=png`,
+  t => `https://eodhd.com/img/logos/US/${t.replace(".", "-")}.png`
 ];
 function logoErr(img) {
   const i = +img.dataset.i + 1;
   if (i < LOGO_SRC.length) { img.dataset.i = i; img.src = LOGO_SRC[i](img.dataset.t); return; }
   const s = document.createElement("span"); s.className = "lgx"; s.textContent = img.dataset.t[0]; img.replaceWith(s);
 }
-const logo = t => `<img class="lg" loading="lazy" referrerpolicy="no-referrer" data-i="0" data-t="${t}" src="${LOGO_SRC[0](t)}" onerror="logoErr(this)" alt="">`;
+function logoOk(img) {                       // prüft, ob das Bild wirklich etwas Sichtbares enthält
+  try {
+    const c = document.createElement("canvas"); c.width = c.height = 16;
+    const x = c.getContext("2d"); x.drawImage(img, 0, 0, 16, 16);
+    const d = x.getImageData(0, 0, 16, 16).data; let vis = 0;
+    for (let k = 0; k < d.length; k += 4) if (d[k+3] > 40 && (d[k] < 235 || d[k+1] < 235 || d[k+2] < 235)) vis++;
+    if (vis < 8) logoErr(img);                // praktisch leer oder nur weiß
+  } catch (e) { /* Bild ohne CORS-Freigabe: nicht prüfbar, also behalten */ }
+}
+const logo = t => `<img class="lg" loading="lazy" crossorigin="anonymous" referrerpolicy="no-referrer" data-i="0" data-t="${t}" src="${LOGO_SRC[0](t)}" onload="logoOk(this)" onerror="logoErr(this)" alt="">`;
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, "0");
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
