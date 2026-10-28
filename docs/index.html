@@ -104,13 +104,19 @@ const SUN = '<svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="no
 const MOON = '<svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="#6366f1"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>';
 /* Logos: mehrere Quellen nacheinander. Leere/weiße Bilder und Fehler -> nächste Quelle, zuletzt Buchstaben-Platzhalter */
 const LOGO_SRC = [
-  t => `https://financialmodelingprep.com/image-stock/${t.replace(".", "-")}.png`,
-  t => `https://assets.parqet.com/logos/symbol/${t.replace(".", "-")}?format=png`,
-  t => `https://eodhd.com/img/logos/US/${t.replace(".", "-")}.png`
+  (t, d) => `https://financialmodelingprep.com/image-stock/${t.replace(".", "-")}.png`,
+  (t, d) => `https://assets.parqet.com/logos/symbol/${t.replace(".", "-")}?format=png`,
+  (t, d) => `https://eodhd.com/img/logos/US/${t.replace(".", "-")}.png`,
+  (t, d) => d ? `https://www.google.com/s2/favicons?domain=${d}&sz=128` : null   // Fallback über die Firmen-Website
 ];
+const logoList = img => LOGO_SRC.map(f => f(img.dataset.t, img.dataset.d)).filter(Boolean);
 function logoErr(img) {
-  const i = +img.dataset.i + 1;
-  if (i < LOGO_SRC.length) { img.dataset.i = i; img.src = LOGO_SRC[i](img.dataset.t); return; }
+  const list = logoList(img), i = +img.dataset.i + 1;
+  if (i < list.length) {
+    img.dataset.i = i;
+    if (list[i].includes("google.com/s2")) img.removeAttribute("crossorigin");   // ohne CORS-Prüfung laden
+    img.src = list[i]; return;
+  }
   const s = document.createElement("span"); s.className = "lgx"; s.textContent = img.dataset.t[0]; img.replaceWith(s);
 }
 function logoOk(img) {                       // prüft, ob das Bild wirklich etwas Sichtbares enthält
@@ -122,7 +128,7 @@ function logoOk(img) {                       // prüft, ob das Bild wirklich etw
     if (vis < 8) logoErr(img);                // praktisch leer oder nur weiß
   } catch (e) { /* Bild ohne CORS-Freigabe: nicht prüfbar, also behalten */ }
 }
-const logo = t => `<img class="lg" loading="lazy" crossorigin="anonymous" referrerpolicy="no-referrer" data-i="0" data-t="${t}" src="${LOGO_SRC[0](t)}" onload="logoOk(this)" onerror="logoErr(this)" alt="">`;
+const logo = (t, d) => `<img class="lg" loading="lazy" crossorigin="anonymous" referrerpolicy="no-referrer" data-i="0" data-t="${t}" data-d="${d || ""}" src="${LOGO_SRC[0](t, d)}" onload="logoOk(this)" onerror="logoErr(this)" alt="">`;
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, "0");
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
@@ -160,7 +166,7 @@ function visible() {
   const rows = D.signals.filter(r => r[1] === sel).map(r => {
     const s = D.stocks[r[0]] || {};
     return {ticker: r[0], candle: r[2], signal: r[3] === "L" ? "Long" : "Short", price: r[4], vol: r[5],
-            name: s.n || r[0], mc: s.mc ?? null, ind: s.i || "", sector: s.s || "Ohne Sektor", etf: s.e || ""};
+            name: s.n || r[0], mc: s.mc ?? null, ind: s.i || "", dom: s.d || "", sector: s.s || "Ohne Sektor", etf: s.e || ""};
   }).filter(r => (dir === "Alle" || r.signal === dir) && (!cd || r.candle === cd) && (!secs.size || secs.has(r.sector)));
   const k = sort.k, m = sort.d;
   rows.sort((a, b) => {
@@ -175,7 +181,7 @@ function render() {
   $("head").innerHTML = COLS.map(([k, t, c]) => `<th class="${c} ${sort.k === k ? "sorted" : ""}" data-k="${k}">${t}${k !== "chart" ? `<span class="ar">${sort.k === k ? (sort.d < 0 ? "↓" : "↑") : "⇅"}</span>` : ""}</th>`).join("");
   $("rows").innerHTML = current.map(r => `<tr>
     <td><span class="${r.signal}">${r.signal}</span>${r.candle === 1 ? SUN : MOON}</td>
-    <td><span class="nm">${logo(r.ticker)}${r.name}</span></td><td class="tk">${r.ticker}</td>
+    <td><span class="nm">${logo(r.ticker, r.dom)}${r.name}</span></td><td class="tk">${r.ticker}</td>
     <td class="num">${fPrice(r.price)}</td><td class="num">${fCap(r.mc)}</td><td class="num">${fVol(r.vol)}</td>
     <td>${r.ind}</td><td class="tk" style="font-weight:600">${r.etf}</td>
     <td><a class="tv" target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}&interval=195">TV</a></td></tr>`).join("");
