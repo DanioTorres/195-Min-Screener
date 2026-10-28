@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>195-Min Signal-Screener</title>
+<style>
+  :root { --bg:#fff; --fg:#1a1a1a; --mut:#777; --line:#e3e3e3; --row:#f5f5f5; --long:#16a34a; --short:#dc2626; --btn:#f0f0f0; --on:#1d4ed8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161616; --fg:#eee; --mut:#999; --line:#333; --row:#202020; --btn:#2a2a2a; } }
+  body { font-family: system-ui, sans-serif; background:var(--bg); color:var(--fg); margin:0; padding:24px; }
+  h1 { margin:0 0 4px; font-size:22px; }
+  .meta { color:var(--mut); font-size:13px; margin-bottom:16px; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+  button, select { background:var(--btn); color:var(--fg); border:0; padding:8px 14px; border-radius:6px; font-size:14px; cursor:pointer; }
+  button.on { background:var(--on); color:#fff; }
+  .wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  tr:nth-child(even) td { background:var(--row); }
+  td.n { text-align:right; font-variant-numeric:tabular-nums; }
+  .Long { color:var(--long); font-weight:600; } .Short { color:var(--short); font-weight:600; }
+  a { color:var(--on); text-decoration:none; }
+  .foot { color:var(--mut); font-size:12px; margin-top:16px; }
+</style>
+</head>
+<body>
+<h1>195-Min Signal-Screener</h1>
+<div class="meta" id="meta">Lade…</div>
+<div class="bar">
+  <button data-d="Alle" class="on">Alle</button><button data-d="Long">Long</button><button data-d="Short">Short</button>
+  <span style="width:12px"></span>
+  <button data-k="0" class="on">Beide</button><button data-k="1">1. Kerze (aktuell)</button><button data-k="2">2. Kerze (vorletzte)</button>
+  <select id="sector"><option value="">Alle Sektoren</option></select>
+</div>
+<div class="wrap"><table>
+  <thead><tr><th>Signal</th><th>Kerze</th><th>Aktie</th><th>Ticker</th><th style="text-align:right">Kurs</th><th>Sektor</th><th>ETF</th><th>Chart</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table></div>
+<div class="foot" id="foot"></div>
+<script>
+let data = null, dir = "Alle", kerze = 0, sector = "";
+const fmt = new Intl.DateTimeFormat("de-DE", { dateStyle: "medium", timeStyle: "short" });
+function render() {
+  const rows = data.signals.filter(s =>
+    (dir === "Alle" || s.signal === dir) && (!kerze || s.kerze === kerze) && (!sector || s.sector === sector));
+  document.getElementById("rows").innerHTML = rows.map(s => `<tr>
+    <td class="${s.signal}">${s.signal}</td><td>${s.kerze}. Kerze <span style="color:var(--mut)">(${fmt.format(new Date(s.cross_bar))})</span></td>
+    <td>${s.name}</td><td><b>${s.ticker}</b></td><td class="n">${s.price.toFixed(2)} $</td>
+    <td>${s.sector}</td><td>${s.etf || ""}</td>
+    <td><a target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(s.ticker)}&interval=195">TV</a></td></tr>`).join("");
+  document.getElementById("foot").textContent = `Gesamt: ${rows.length} Signale`;
+}
+fetch("data/latest.json?" + Date.now()).then(r => r.json()).then(d => {
+  data = d;
+  const st = d.settings;
+  document.getElementById("meta").textContent = d.bar_start
+    ? `Letzte Kerze ab ${fmt.format(new Date(d.bar_start))} · aktualisiert ${fmt.format(new Date(d.generated))} · EMA ${st.ema_fast}/${st.ema_slow}`
+    : "Keine Daten";
+  const sel = document.getElementById("sector");
+  [...new Set(d.signals.map(s => s.sector))].sort().forEach(x => sel.add(new Option(x, x)));
+  sel.onchange = () => { sector = sel.value; render(); };
+  render();
+}).catch(e => document.getElementById("meta").textContent = "Noch keine Daten – Workflow einmal starten.");
+document.querySelectorAll("button[data-d]").forEach(b => b.onclick = () => {
+  dir = b.dataset.d; document.querySelectorAll("button[data-d]").forEach(x => x.classList.toggle("on", x === b)); render(); });
+document.querySelectorAll("button[data-k]").forEach(b => b.onclick = () => {
+  kerze = +b.dataset.k; document.querySelectorAll("button[data-k]").forEach(x => x.classList.toggle("on", x === b)); render(); });
+</script>
+</body>
+</html>
