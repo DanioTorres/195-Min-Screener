@@ -1,0 +1,27 @@
+name: Screener
+
+on:
+  schedule:
+    - cron: "50 16,17,20,21 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python screener.py
+      - name: Ergebnis committen
+        run: |
+          git config user.name "screener-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add docs/data
+          git diff --staged --quiet || (git commit -m "Signale aktualisiert" && git push)
