@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
+from urllib.parse import urlparse
 
 # ----------------------------- Einstellungen -----------------------------
 RSI_LEN = 14
@@ -144,6 +145,29 @@ def load_caps(uni: pd.DataFrame, today: dt.date) -> dict:
     return caps
 
 
+def fetch_domain(sym: str) -> str:
+    try:
+        web = yf.Ticker(sym).info.get("website") or ""
+        host = urlparse(web if "//" in web else "//" + web).netloc.lower()
+        return host[4:] if host.startswith("www.") else host
+    except Exception:
+        return ""
+
+
+def load_domains(sub: pd.DataFrame) -> dict:
+    """Firmen-Domains (für Logo-Fallback). Wird einmalig geholt und gecacht."""
+    f = OUT_DIR / "domains.json"
+    doms = json.loads(f.read_text()) if f.exists() else {}
+    todo = sub[~sub["ticker"].isin(doms)]
+    if len(todo):
+        print(f"lade Domains für {len(todo)} Aktien ...")
+        with ThreadPoolExecutor(8) as ex:
+            for t, d in zip(todo["ticker"], ex.map(fetch_domain, todo["yf"])):
+                doms[t] = d
+        f.write_text(json.dumps(doms))
+    return doms
+
+
 def main():
     now = pd.Timestamp.now(tz=ET)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -176,8 +200,9 @@ def main():
 
     caps = load_caps(uni, now.date())
     used = {r[0] for r in rows}
+    doms = load_domains(uni[uni["ticker"].isin(used)])
     stocks = {r.ticker: {"n": r["name"], "s": r["sector"], "e": r["etf"], "i": r["industry"],
-                         "mc": caps.get(r["ticker"])}
+                         "mc": caps.get(r["ticker"]), "d": doms.get(r["ticker"]) or None}
               for _, r in uni.iterrows() if r["ticker"] in used}
     for t, v in stocks.items():  # NaN -> None
         v["e"] = v["e"] if isinstance(v["e"], str) else None
