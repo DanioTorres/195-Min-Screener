@@ -10,8 +10,10 @@ jeden Tag auswählen kann. (RSI-/Preis-Filter optional, standardmäßig AUS.)
 """
 import io
 import json
+import os
+import sys
 import datetime as dt
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FTimeout
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -31,6 +33,9 @@ USE_PRICE = False     # True: zusätzlich Close kreuzt EMA20 in Signalrichtung
 WARMUP_BARS = 25      # erste Kerzen nur zum Einschwingen der Indikatoren
 KEEP_DAYS = 120       # so lange bleiben alte Signale im Archiv
 CAP_REFRESH_DAYS = 7  # Marktkapitalisierung nur wöchentlich neu laden
+CAP_BUDGET_S = 150    # max. Sekunden fürs Nachladen der Marktkapitalisierung
+DOMAIN_BUDGET_S = 150 # max. Sekunden fürs Nachladen der Firmen-Domains
+DOMAIN_MAX_PER_RUN = 120  # pro Lauf höchstens so viele neue Domains
 BATCH = 100
 OUT_DIR = Path("docs/data")
 # -------------------------------------------------------------------------
@@ -120,6 +125,30 @@ def signals_for(ticker: str, bars: pd.DataFrame) -> list:
     return rows
 
 
+def read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return default
+
+
+def pool_map(fn, items, workers, budget):
+    """Führt fn parallel aus, bricht nach `budget` Sekunden ab (hängende Anfragen blockieren nichts)."""
+    ex = ThreadPoolExecutor(workers)
+    futs = {ex.submit(fn, x): x for x in items}
+    out = {}
+    try:
+        for f in as_completed(futs, timeout=budget):
+            try:
+                out[futs[f]] = f.result()
+            except Exception:
+                pass
+    except FTimeout:
+        print(f"Zeitbudget ({budget}s) erreicht, {len(out)}/{len(items)} fertig")
+    ex.shutdown(wait=False, cancel_futures=True)
+    return out
+
+
 def fetch_cap(sym: str):
     try:
         fi = yf.Ticker(sym).fast_info
@@ -131,41 +160,14 @@ def fetch_cap(sym: str):
         return None
 
 
-def load_caps(uni: pd.DataFrame, today: dt.date) -> dict:
-    f = OUT_DIR / "caps.json"
-    old = json.loads(f.read_text()) if f.exists() else {"updated": "1970-01-01", "caps": {}}
-    age = (today - dt.date.fromisoformat(old["updated"])).days
-    if age < CAP_REFRESH_DAYS and all(t in old["caps"] for t in uni["ticker"]):
-        return old["caps"]
-    print("lade Marktkapitalisierung ...")
-    with ThreadPoolExecutor(16) as ex:
-        vals = list(ex.map(fetch_cap, uni["yf"]))
-    caps = {t: (v if v else old["caps"].get(t)) for t, v in zip(uni["ticker"], vals)}
-    f.write_text(json.dumps({"updated": today.isoformat(), "caps": caps}))
-    return caps
-
-
-def fetch_domain(sym: str) -> str:
+def fetch_domain(sym: str):
+    """Domain der Firmen-Website; None bei Fehler (wird dann später erneut versucht)."""
     try:
         web = yf.Ticker(sym).info.get("website") or ""
         host = urlparse(web if "//" in web else "//" + web).netloc.lower()
         return host[4:] if host.startswith("www.") else host
     except Exception:
-        return ""
-
-
-def load_domains(sub: pd.DataFrame) -> dict:
-    """Firmen-Domains (für Logo-Fallback). Wird einmalig geholt und gecacht."""
-    f = OUT_DIR / "domains.json"
-    doms = json.loads(f.read_text()) if f.exists() else {}
-    todo = sub[~sub["ticker"].isin(doms)]
-    if len(todo):
-        print(f"lade Domains für {len(todo)} Aktien ...")
-        with ThreadPoolExecutor(8) as ex:
-            for t, d in zip(todo["ticker"], ex.map(fetch_domain, todo["yf"])):
-                doms[t] = d
-        f.write_text(json.dumps(doms))
-    return doms
+        return None
 
 
 def main():
@@ -193,28 +195,58 @@ def main():
 
     # alte Signale behalten (außer an Tagen, die gerade neu berechnet wurden)
     f = OUT_DIR / "signals.json"
-    old_rows = json.loads(f.read_text())["signals"] if f.exists() else []
+    old_rows = read_json(f, {"signals": []})["signals"]
     cutoff = (now - pd.Timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")
     kept = [r for r in old_rows if r[1] not in seen_dates and r[1] >= cutoff]
     rows = sorted(kept + new_rows, key=lambda r: (r[1], r[2], r[0]))
 
-    caps = load_caps(uni, now.date())
     used = {r[0] for r in rows}
-    doms = load_domains(uni[uni["ticker"].isin(used)])
-    stocks = {r.ticker: {"n": r["name"], "s": r["sector"], "e": r["etf"], "i": r["industry"],
-                         "mc": caps.get(r["ticker"]), "d": doms.get(r["ticker"]) or None}
-              for _, r in uni.iterrows() if r["ticker"] in used}
-    for t, v in stocks.items():  # NaN -> None
-        v["e"] = v["e"] if isinstance(v["e"], str) else None
+    sub = uni[uni["ticker"].isin(used)]
+    capf = read_json(OUT_DIR / "caps.json", {"updated": "1970-01-01", "caps": {}})
+    caps = capf["caps"]
+    doms = read_json(OUT_DIR / "domains.json", {})
 
-    out = {"generated": now.isoformat(),
-           "last_bar": last_bar.isoformat() if last_bar is not None else None,
-           "settings": {"ema_fast": EMA_FAST, "ema_slow": EMA_SLOW,
-                        "use_rsi": USE_RSI, "use_price": USE_PRICE},
-           "stocks": stocks, "signals": rows}
-    f.write_text(json.dumps(out, separators=(",", ":")))
-    print(f"{len(rows)} Signale, {len(stocks)} Aktien, letzte Kerze {out['last_bar']}")
+    def write():
+        stocks = {}
+        for _, r in sub.iterrows():
+            stocks[r["ticker"]] = {"n": r["name"], "s": r["sector"],
+                                   "e": r["etf"] if isinstance(r["etf"], str) else None,
+                                   "i": r["industry"], "mc": caps.get(r["ticker"]),
+                                   "d": doms.get(r["ticker"]) or None}
+        out = {"generated": now.isoformat(),
+               "last_bar": last_bar.isoformat() if last_bar is not None else None,
+               "settings": {"ema_fast": EMA_FAST, "ema_slow": EMA_SLOW,
+                            "use_rsi": USE_RSI, "use_price": USE_PRICE},
+               "stocks": stocks, "signals": rows}
+        f.write_text(json.dumps(out, separators=(",", ":")))
+
+    write()   # Signale sind jetzt sicher gespeichert, auch wenn das Nachladen unten scheitert
+    print(f"{len(rows)} Signale gespeichert, letzte Kerze {last_bar}", flush=True)
+
+    # --- Marktkapitalisierung nachladen (mit Zeitbudget) ---
+    age = (now.date() - dt.date.fromisoformat(capf["updated"])).days
+    todo = [(t, y) for t, y in zip(sub["ticker"], sub["yf"]) if age >= CAP_REFRESH_DAYS or caps.get(t) is None]
+    if todo:
+        res = pool_map(lambda x: fetch_cap(x[1]), todo, 12, CAP_BUDGET_S)
+        for (t, _), v in res.items():
+            if v:
+                caps[t] = v
+        (OUT_DIR / "caps.json").write_text(json.dumps({"updated": now.date().isoformat(), "caps": caps}))
+        write()
+
+    # --- Firmen-Domains für Logos nachladen (nur Neue, mit Zeitbudget) ---
+    todo = [(t, y) for t, y in zip(sub["ticker"], sub["yf"]) if t not in doms][:DOMAIN_MAX_PER_RUN]
+    if todo:
+        res = pool_map(lambda x: fetch_domain(x[1]), todo, 6, DOMAIN_BUDGET_S)
+        for (t, _), d in res.items():
+            if d is not None:
+                doms[t] = d
+        (OUT_DIR / "domains.json").write_text(json.dumps(doms))
+        write()
+    print("fertig", flush=True)
 
 
 if __name__ == "__main__":
     main()
+    sys.stdout.flush()
+    os._exit(0)   # beendet auch dann sauber, wenn noch eine Yahoo-Anfrage im Hintergrund hängt
