@@ -2,8 +2,14 @@ name: Screener
 
 on:
   schedule:
+    # 1. Kerze endet 12:45 ET, 2. Kerze 16:00 ET (UTC-Zeit hängt von der Sommerzeit ab,
+    # daher beide Varianten). Das Script verwirft unfertige Kerzen selbst.
     - cron: "50 16,17,20,21 * * 1-5"
   workflow_dispatch: {}
+
+concurrency:
+  group: screener
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -11,6 +17,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,4 +31,4 @@ jobs:
           git config user.name "screener-bot"
           git config user.email "bot@users.noreply.github.com"
           git add docs/data
-          git diff --staged --quiet || (git commit -m "Signale aktualisiert" && git push)
+          git diff --staged --quiet || (git commit -m "Signale aktualisiert" && git pull --rebase && git push)
