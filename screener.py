@@ -64,7 +64,7 @@ def get_universe() -> pd.DataFrame:
 
 
 def to_195(df30: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
-    """30-Min -> 195-Min-Kerzen (2 pro Tag). Nur abgeschlossene Kerzen."""
+    """15-Min -> 195-Min-Kerzen (2 pro Tag, Schnitt exakt um 12:45 ET). Nur abgeschlossene Kerzen."""
     d = df30.copy()
     d.index = d.index.tz_convert(ET)
     d = d[(d.index.time >= dt.time(9, 30)) & (d.index.time < dt.time(16, 0))]
@@ -178,7 +178,7 @@ def main():
 
     for i in range(0, len(uni), BATCH):
         chunk = uni.iloc[i:i + BATCH]
-        raw = yf.download(list(chunk["yf"]), period="60d", interval="30m",
+        raw = yf.download(list(chunk["yf"]), period="60d", interval="15m",
                           group_by="ticker", threads=True, progress=False, auto_adjust=False)
         for _, row in chunk.iterrows():
             try:
