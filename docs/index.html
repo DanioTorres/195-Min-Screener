@@ -23,6 +23,7 @@
   #dir button[data-v="Long"].on { background:#9be28e; color:#0b3d0b; }
   #dir button[data-v="Short"].on { background:#dc2626; }
   #cd button[data-v="1"].on { background:var(--sun); } #cd button[data-v="2"].on { background:var(--moon); }
+  .grp.dis { opacity:.4; pointer-events:none; }
   .spacer { flex:1; }
   .pop { position:absolute; top:44px; left:0; background:var(--pop); border:1px solid var(--line); border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,.15); z-index:20; display:none; text-align:left; }
   .pop.open { display:block; }
@@ -65,12 +66,12 @@
 </head>
 <body>
 <div class="card">
-  <h1>Tradingsignale <span class="acc">195 Min.</span></h1>
+  <h1>Tradingsignale <span class="acc" id="tfTitle">195 Min.</span></h1>
   <p class="intro" id="intro"></p>
 
   <div class="controls">
     <div class="grp" id="dir"><button data-v="Alle" class="on">Alle</button><button data-v="Long">Long</button><button data-v="Short">Short</button></div>
-    <div class="grp" id="tf"><button class="on">195 Min.</button></div>
+    <div class="grp" id="tf"><button data-v="1d">1 Tag</button><button data-v="195" class="on">195 Min.</button></div>
     <div class="grp icons" id="cd">
       <button data-v="0" class="on" title="Ganzer Tag"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>
       <button data-v="1" title="1. Kerze"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
@@ -134,7 +135,7 @@ const pad = n => String(n).padStart(2, "0");
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 const dmy = s => `${s.slice(8,10)}.${s.slice(5,7)}.${s.slice(0,4)}`;
 
-let D = null, dates = new Set(), sel = "", dir = "Alle", cd = 0, secs = new Set(), sort = {k:"mc", d:-1}, calY = 0, calM = 0, current = [];
+let D = null, dates = new Set(), datesBy = {"195": new Set(), "1d": new Set()}, tf = "195", sel = "", dir = "Alle", cd = 0, secs = new Set(), sort = {k:"mc", d:-1}, calY = 0, calM = 0, current = [];
 
 /* ---- Zeitangabe mit Sommer-/Winterzeit (USA und Deutschland getrennt) ---- */
 function tzOffMin(tz, ms) {
@@ -152,8 +153,11 @@ function introText() {
   const n = new Intl.DateTimeFormat("en-US", {timeZone: "America/New_York", year: "numeric", month: "numeric", day: "numeric"}).formatToParts(new Date());
   const g = t => +n.find(x => x.type === t).value;
   const t1 = berlin(etToUtc(g("year"), g("month")-1, g("day"), 12, 45));   // Ende 1. Kerze
-  const t2 = berlin(etToUtc(g("year"), g("month")-1, g("day"), 16, 0));    // Ende 2. Kerze
-  $("intro").textContent = `Hier findest Du Deine Tradingsignale. Die Signale werden täglich aktualisiert und orientieren sich an der US-Börsenzeit. Dies entspricht aktuell ${t1} Uhr und ${t2} Uhr deutscher Zeit.`;
+  const t2 = berlin(etToUtc(g("year"), g("month")-1, g("day"), 16, 0));    // Ende 2. Kerze = Handelsschluss
+  const base = "Hier findest Du Deine Tradingsignale. Die Signale werden täglich aktualisiert und orientieren sich an der US-Börsenzeit.";
+  $("intro").textContent = tf === "1d"
+    ? `${base} Tagessignale entstehen nach Handelsschluss, aktuell um ${t2} Uhr deutscher Zeit.`
+    : `${base} Dies entspricht aktuell ${t1} Uhr und ${t2} Uhr deutscher Zeit.`;
 }
 
 /* ---- Formatierung ---- */
@@ -163,11 +167,11 @@ const fVol = v => v >= 1e6 ? Math.round(v/1e6) + " Mio." : Math.round(v/1e3) + "
 
 /* ---- Daten ---- */
 function visible() {
-  const rows = D.signals.filter(r => r[1] === sel).map(r => {
+  const rows = (tf === "1d" ? (D.daily || []) : D.signals).filter(r => r[1] === sel).map(r => {
     const s = D.stocks[r[0]] || {};
     return {ticker: r[0], candle: r[2], signal: r[3] === "L" ? "Long" : "Short", price: r[4], vol: r[5],
             name: s.n || r[0], mc: s.mc ?? null, ind: s.i || "", dom: s.d || "", sector: s.s || "Ohne Sektor", etf: s.e || ""};
-  }).filter(r => (dir === "Alle" || r.signal === dir) && (!cd || r.candle === cd) && (!secs.size || secs.has(r.sector)));
+  }).filter(r => (dir === "Alle" || r.signal === dir) && (tf === "1d" || !cd || r.candle === cd) && (!secs.size || secs.has(r.sector)));
   const k = sort.k, m = sort.d;
   rows.sort((a, b) => {
     let x = a[k], y = b[k];
@@ -180,7 +184,7 @@ function render() {
   current = visible();
   $("head").innerHTML = COLS.map(([k, t, c]) => `<th class="${c} ${sort.k === k ? "sorted" : ""}" data-k="${k}">${t}${k !== "chart" ? `<span class="ar">${sort.k === k ? (sort.d < 0 ? "↓" : "↑") : "⇅"}</span>` : ""}</th>`).join("");
   $("rows").innerHTML = current.map(r => `<tr>
-    <td><span class="${r.signal}">${r.signal}</span>${r.candle === 1 ? SUN : MOON}</td>
+    <td><span class="${r.signal}">${r.signal}</span>${r.candle === 1 ? SUN : r.candle === 2 ? MOON : ""}</td>
     <td><span class="nm">${logo(r.ticker, r.dom)}${r.name}</span></td><td class="tk">${r.ticker}</td>
     <td class="num">${fPrice(r.price)}</td><td class="num">${fCap(r.mc)}</td><td class="num">${fVol(r.vol)}</td>
     <td>${r.ind}</td><td class="tk" style="font-weight:600">${r.etf}</td>
@@ -201,6 +205,15 @@ function group(id, fn) {
     document.querySelectorAll(`#${id} button`).forEach(x => x.classList.toggle("on", x === b)); fn(b.dataset.v); render(); });
 }
 group("dir", v => dir = v);
+document.querySelectorAll("#tf button").forEach(b => b.onclick = () => {
+  tf = b.dataset.v;
+  document.querySelectorAll("#tf button").forEach(x => x.classList.toggle("on", x === b));
+  dates = datesBy[tf]; if (!dates.has(sel)) sel = latest() || "";
+  $("cd").classList.toggle("dis", tf === "1d");
+  $("tfTitle").textContent = tf === "1d" ? "1 Tag" : "195 Min.";
+  document.querySelector(".foot .lg").style.display = tf === "1d" ? "none" : "";
+  introText(); render();
+});
 group("cd", v => cd = +v);
 
 /* Sektor-Popup */
@@ -243,10 +256,12 @@ $("copyBtn").onclick = async () => {
 introText();
 fetch("data/signals.json?" + Date.now()).then(r => r.json()).then(d => {
   D = d;
-  d.signals.forEach(r => dates.add(r[1]));
+  d.signals.forEach(r => datesBy["195"].add(r[1]));
+  (d.daily || []).forEach(r => datesBy["1d"].add(r[1]));
+  dates = datesBy[tf];
   sel = latest() || "";
   const g = new Intl.DateTimeFormat("de-DE", {dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Berlin"}).format(new Date(d.generated));
-  $("note").textContent = `Signal: EMA ${d.settings.ema_fast} kreuzt EMA ${d.settings.ema_slow} auf der 195-Min-Kerze (Long: von unten nach oben, Short: von oben nach unten). Universum: S&P 500. Daten: Yahoo Finance. Stand: ${g}. Reine Information, keine Anlageberatung.`;
+  $("note").textContent = `Signal: EMA ${d.settings.ema_fast} kreuzt EMA ${d.settings.ema_slow} auf der 195-Min- bzw. Tageskerze (Long: von unten nach oben, Short: von oben nach unten). Universum: S&P 500. Daten: Yahoo Finance. Stand: ${g}. Reine Information, keine Anlageberatung.`;
   render();
 }).catch(() => { $("empty").style.display = "block"; $("empty").textContent = "Noch keine Daten – Workflow „Screener“ einmal starten."; render(); });
 </script>
