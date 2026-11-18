@@ -4,7 +4,10 @@ on:
   schedule:
     # 1. Kerze endet 12:45 ET, 2. Kerze 16:00 ET (UTC-Zeit hängt von der Sommerzeit ab,
     # daher beide Varianten). Das Script verwirft unfertige Kerzen selbst.
+    # Mehrere Versuche pro Kerzenende, weil GitHub geplante Läufe oft verzögert oder auslässt.
     - cron: "50 16,17,20,21 * * 1-5"
+    - cron: "15 17,18,21,22 * * 1-5"
+    - cron: "40 17,18,21,22 * * 1-5"
   workflow_dispatch: {}
 
 concurrency:
