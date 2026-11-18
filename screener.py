@@ -36,6 +36,7 @@ CAP_REFRESH_DAYS = 7  # Marktkapitalisierung nur wöchentlich neu laden
 CAP_BUDGET_S = 150    # max. Sekunden fürs Nachladen der Marktkapitalisierung
 DOMAIN_BUDGET_S = 150 # max. Sekunden fürs Nachladen der Firmen-Domains
 DOMAIN_MAX_PER_RUN = 120  # pro Lauf höchstens so viele neue Domains
+DAILY_KEEP_DAYS = 120     # so viele Kalendertage Tagessignale werden angezeigt
 BATCH = 100
 OUT_DIR = Path("docs/data")
 # -------------------------------------------------------------------------
@@ -103,11 +104,8 @@ def cross_down(a, b):
     return (a.shift(1) >= b.shift(1)) & (a < b)
 
 
-def signals_for(ticker: str, bars: pd.DataFrame) -> list:
-    """Alle Signale im Verlauf: [ticker, datum, kerze(1/2), 'L'/'S', kurs, tagesvolumen]."""
-    if len(bars) < WARMUP_BARS + 2:
-        return []
-    c = bars["Close"]
+def cross_masks(c: pd.Series):
+    """Long-/Short-Kreuzung (EMA 5 kreuzt EMA 20), optional mit RSI-/Preis-Filter."""
     e_f = c.ewm(span=EMA_FAST, adjust=False).mean()
     e_s = c.ewm(span=EMA_SLOW, adjust=False).mean()
     long_, short_ = cross_up(e_f, e_s), cross_down(e_f, e_s)
@@ -119,7 +117,15 @@ def signals_for(ticker: str, bars: pd.DataFrame) -> list:
     if USE_PRICE:
         long_ &= cross_up(c, e_s)
         short_ &= cross_down(c, e_s)
+    return long_, short_
 
+
+def signals_for(ticker: str, bars: pd.DataFrame) -> list:
+    """195-Min: [ticker, datum, kerze(1/2), 'L'/'S', kurs, tagesvolumen]."""
+    if len(bars) < WARMUP_BARS + 2:
+        return []
+    c = bars["Close"]
+    long_, short_ = cross_masks(c)
     dates = np.array([t.date() for t in bars.index])
     day_vol = bars["Volume"].groupby(dates).transform("sum")
     rows = []
@@ -128,6 +134,30 @@ def signals_for(ticker: str, bars: pd.DataFrame) -> list:
             continue
         rows.append([ticker, bars.index[i].strftime("%Y-%m-%d"), int(bars["bar_no"].iloc[i]),
                      "L" if long_.iloc[i] else "S", round(float(c.iloc[i]), 2), int(day_vol.iloc[i])])
+    return rows
+
+
+def daily_signals(ticker: str, df: pd.DataFrame, now: pd.Timestamp, cutoff: str) -> list:
+    """Tagessignale: [ticker, datum, 0, 'L'/'S', kurs, volumen]. Nur abgeschlossene Tageskerzen."""
+    df = df.dropna(subset=["Close"])
+    dates = [t.date() for t in df.index]
+    today = now.date()
+    done = [d < today or (d == today and now.time() >= dt.time(16, 5)) for d in dates]
+    df = df[done]
+    if len(df) < WARMUP_BARS + 2:
+        return []
+    c = df["Close"]
+    long_, short_ = cross_masks(c)
+    rows = []
+    for i in np.flatnonzero((long_ | short_).to_numpy()):
+        if i < WARMUP_BARS:
+            continue
+        d = df.index[i].strftime("%Y-%m-%d")
+        if d < cutoff:
+            continue
+        vol = df["Volume"].iloc[i]
+        rows.append([ticker, d, 0, "L" if long_.iloc[i] else "S", round(float(c.iloc[i]), 2),
+                     int(vol) if pd.notna(vol) else 0])
     return rows
 
 
@@ -180,13 +210,25 @@ def main():
     now = pd.Timestamp.now(tz=ET)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     uni = get_universe()
-    new_rows, seen_dates, last_bar = [], set(), None
+    new_rows, daily_rows, seen_dates, last_bar = [], [], set(), None
+    d_cutoff = (now - pd.Timedelta(days=DAILY_KEEP_DAYS)).strftime("%Y-%m-%d")
 
     for i in range(0, len(uni), BATCH):
         chunk = uni.iloc[i:i + BATCH]
         raw = yf.download(list(chunk["yf"]), period="60d", interval="15m",
                           group_by="ticker", threads=True, progress=False, auto_adjust=False)
+        try:
+            rawd = yf.download(list(chunk["yf"]), period="1y", interval="1d",
+                               group_by="ticker", threads=True, progress=False, auto_adjust=False)
+        except Exception as e:
+            print("Tagesdaten fehlgeschlagen", e)
+            rawd = None
         for _, row in chunk.iterrows():
+            try:
+                if rawd is not None:
+                    daily_rows += daily_signals(row["ticker"], rawd[row["yf"]], now, d_cutoff)
+            except Exception as e:
+                print("skip daily", row["ticker"], e)
             try:
                 df = raw[row["yf"]].dropna(subset=["Close"])
                 bars = to_195(df, now)
@@ -206,7 +248,8 @@ def main():
     kept = [r for r in old_rows if r[1] not in seen_dates and r[1] >= cutoff]
     rows = sorted(kept + new_rows, key=lambda r: (r[1], r[2], r[0]))
 
-    used = {r[0] for r in rows}
+    daily_rows.sort(key=lambda r: (r[1], r[0]))
+    used = {r[0] for r in rows} | {r[0] for r in daily_rows}
     sub = uni[uni["ticker"].isin(used)]
     capf = read_json(OUT_DIR / "caps.json", {"updated": "1970-01-01", "caps": {}})
     caps = capf["caps"]
@@ -223,11 +266,11 @@ def main():
                "last_bar": last_bar.isoformat() if last_bar is not None else None,
                "settings": {"ema_fast": EMA_FAST, "ema_slow": EMA_SLOW,
                             "use_rsi": USE_RSI, "use_price": USE_PRICE},
-               "stocks": stocks, "signals": rows}
+               "stocks": stocks, "signals": rows, "daily": daily_rows}
         f.write_text(json.dumps(out, separators=(",", ":")))
 
     write()   # Signale sind jetzt sicher gespeichert, auch wenn das Nachladen unten scheitert
-    print(f"{len(rows)} Signale gespeichert, letzte Kerze {last_bar}", flush=True)
+    print(f"{len(rows)} 195-Min-Signale, {len(daily_rows)} Tagessignale gespeichert, letzte Kerze {last_bar}", flush=True)
 
     # --- Marktkapitalisierung nachladen (mit Zeitbudget) ---
     age = (now.date() - dt.date.fromisoformat(capf["updated"])).days
