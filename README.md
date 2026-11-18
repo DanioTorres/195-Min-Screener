@@ -1,7 +1,7 @@
 # 195-Min Signal-Screener
 
-Long: EMA 5 kreuzt EMA 20 von unten nach oben auf der letzten (1. Kerze) oder vorletzten (2. Kerze) 195-Min-Kerze. Short: von oben nach unten. RSI-/Preis-Filter sind optional (`USE_RSI`, `USE_PRICE`).
-Eine US-Sitzung hat 2 Kerzen (09:30-12:45 und 12:45-16:00 ET). Universum: S&P 500. Daten: Yahoo Finance (yfinance).
+Signal: EMA 5 kreuzt EMA 20 auf der 195-Min-Kerze (Long = von unten nach oben, Short = von oben nach unten). ☀ = Signal auf der 1. Kerze des Tages, ☾ = 2. Kerze. RSI-/Preis-Filter optional (`USE_RSI`, `USE_PRICE`).
+Zusätzlich gibt es Tagessignale (Button „1 Tag“): EMA 5 kreuzt EMA 20 auf der abgeschlossenen Tageskerze. Eine US-Sitzung hat 2 Kerzen (09:30-12:45 und 12:45-16:00 ET). Universum: S&P 500. Daten: Yahoo Finance (yfinance).
 
 ## Einrichten
 1. Neues GitHub-Repo anlegen, alle Dateien hochladen.
