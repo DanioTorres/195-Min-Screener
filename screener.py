@@ -30,7 +30,7 @@ EMA_FAST = 5
 EMA_SLOW = 20
 USE_RSI = False       # True: zusätzlich RSI kreuzt seinen SMA in Signalrichtung
 USE_PRICE = False     # True: zusätzlich Close kreuzt EMA20 in Signalrichtung
-WARMUP_BARS = 25      # erste Kerzen nur zum Einschwingen der Indikatoren
+WARMUP_BARS = 60      # erste Kerzen nur zum Einschwingen der EMAs (TradingView rechnet mit längerer Historie)
 KEEP_DAYS = 120       # so lange bleiben alte Signale im Archiv
 CAP_REFRESH_DAYS = 7  # Marktkapitalisierung nur wöchentlich neu laden
 CAP_BUDGET_S = 150    # max. Sekunden fürs Nachladen der Marktkapitalisierung
@@ -71,15 +71,21 @@ def to_195(df30: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
     split = dt.time(12, 45)
     d["date"] = d.index.date
     d["bar"] = (d.index.time >= split).astype(int)
+    d["ts"] = d.index
     g = d.groupby(["date", "bar"]).agg(
         Open=("Open", "first"), High=("High", "max"), Low=("Low", "min"),
-        Close=("Close", "last"), Volume=("Volume", "sum"),
+        Close=("Close", "last"), Volume=("Volume", "sum"), last_t=("ts", "last"),
     )
     starts = [pd.Timestamp(dt.datetime.combine(day, dt.time(9, 30) if bar == 0 else split), tz=ET)
               for day, bar in g.index]
     g.index = pd.DatetimeIndex(starts)
     g["bar_no"] = [1 if t.time() == dt.time(9, 30) else 2 for t in g.index]
-    return g[g.index + pd.Timedelta(minutes=BAR_MIN) <= now]
+    g = g[g.index + pd.Timedelta(minutes=BAR_MIN) <= now]
+    # Kerze nur gelten lassen, wenn ihre letzte 15-Min-Kerze (12:30 bzw. 15:45) wirklich vorliegt.
+    # Sonst wäre der Schlusskurs unvollständig und das Signal könnte sich später ändern.
+    need = g["bar_no"].map({1: dt.time(12, 30), 2: dt.time(15, 45)})
+    ok = [t.time() >= n for t, n in zip(g["last_t"], need)]
+    return g[ok]
 
 
 def rsi(close: pd.Series, n: int) -> pd.Series:
