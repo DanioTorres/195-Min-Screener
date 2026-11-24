@@ -68,6 +68,7 @@
 <div class="card">
   <h1>Tradingsignale <span class="acc" id="tfTitle">195 Min.</span></h1>
   <p class="intro" id="intro"></p>
+  <div id="stand" style="font-size:12px;color:var(--mut);margin:-18px 0 22px"></div>
 
   <div class="controls">
     <div class="grp" id="dir"><button data-v="Alle" class="on">Alle</button><button data-v="Long">Long</button><button data-v="Short">Short</button></div>
@@ -262,6 +263,10 @@ fetch("data/signals.json?" + Date.now()).then(r => r.json()).then(d => {
   sel = latest() || "";
   const g = new Intl.DateTimeFormat("de-DE", {dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Berlin"}).format(new Date(d.generated));
   $("note").textContent = `Signal: EMA ${d.settings.ema_fast} kreuzt EMA ${d.settings.ema_slow} auf der 195-Min- bzw. Tageskerze (Long: von unten nach oben, Short: von oben nach unten). Universum: S&P 500. Daten: Yahoo Finance. Stand: ${g}. Reine Information, keine Anlageberatung.`;
+  if (d.last_bar) {
+    const end = new Date(new Date(d.last_bar).getTime() + 195 * 60000);
+    $("stand").textContent = "Datenstand: Kerze bis " + new Intl.DateTimeFormat("de-DE", {weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin"}).format(end) + " Uhr (deutsche Zeit)";
+  }
   render();
 }).catch(() => { $("empty").style.display = "block"; $("empty").textContent = "Noch keine Daten – Workflow „Screener“ einmal starten."; render(); });
 </script>
