@@ -210,16 +210,16 @@ def main():
     now = pd.Timestamp.now(tz=ET)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     uni = get_universe()
-    new_rows, daily_rows, seen_dates, last_bar = [], [], set(), None
+    new_rows, daily_rows, seen_dates, last_bar, got = [], [], set(), None, 0
     d_cutoff = (now - pd.Timedelta(days=DAILY_KEEP_DAYS)).strftime("%Y-%m-%d")
 
     for i in range(0, len(uni), BATCH):
         chunk = uni.iloc[i:i + BATCH]
         raw = yf.download(list(chunk["yf"]), period="60d", interval="15m",
-                          group_by="ticker", threads=True, progress=False, auto_adjust=False)
+                          group_by="ticker", threads=True, progress=False, auto_adjust=False, timeout=30)
         try:
             rawd = yf.download(list(chunk["yf"]), period="1y", interval="1d",
-                               group_by="ticker", threads=True, progress=False, auto_adjust=False)
+                               group_by="ticker", threads=True, progress=False, auto_adjust=False, timeout=30)
         except Exception as e:
             print("Tagesdaten fehlgeschlagen", e)
             rawd = None
@@ -231,6 +231,7 @@ def main():
                 print("skip daily", row["ticker"], e)
             try:
                 df = raw[row["yf"]].dropna(subset=["Close"])
+                got += 1 if len(df) else 0
                 bars = to_195(df, now)
                 if bars.empty:
                     continue
@@ -240,6 +241,12 @@ def main():
                 new_rows += signals_for(row["ticker"], bars)
             except Exception as e:
                 print("skip", row["ticker"], e)
+
+    print(f"Kursdaten für {got} von {len(uni)} Aktien erhalten", flush=True)
+    if got < len(uni) * 0.5:
+        print("FEHLER: Yahoo hat kaum Daten geliefert - bestehende Signale bleiben unverändert.", flush=True)
+        sys.stdout.flush()
+        os._exit(1)
 
     # alte Signale behalten (außer an Tagen, die gerade neu berechnet wurden)
     f = OUT_DIR / "signals.json"
